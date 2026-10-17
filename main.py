@@ -7,7 +7,6 @@ from kivy.core.window import Window
 from kivy.clock import Clock
 from kivy.uix.image import Image
 
-# [ЗМІНА] Імпортуємо компоненти для діалогового вікна паузи (KivyMD)
 import time
 import random
 from kivy.metrics import dp
@@ -17,46 +16,79 @@ from kivymd.uix.dialog import (MDDialog,
 from kivymd.uix.button import MDButton, MDButtonText
 from kivy.uix.widget import Widget
 
+# [ЗМІНА] Додано NumericProperty для автоматичної прив'язки значень (HP, таймер)
+from kivy.properties import NumericProperty
+# [ЗМІНА] Додано FitImage та MDFloatLayout для створення паралакс-фону
+from kivymd.uix.fitimage import FitImage
+from kivymd.uix.floatlayout import MDFloatLayout
 
-# [ЗМІНА] Куля тепер приймає параметр speed, щоб визначати напрямок (вгору або вниз)
+# [ЗМІНА] Клас рухомого фону для паралакс-ефекту з двома зображеннями підряд
+class MoveBackground(MDFloatLayout):
+    speed = NumericProperty(1)
+
+    def __init__(self, image_source, speed=1, **kwargs):
+        super().__init__(**kwargs)
+        self.speed = speed
+
+        # Два зображення, одне над іншим для безперервної прокрутки
+        self.bg1 = FitImage(source=image_source, size_hint=(1, 1), pos=(0, 0))
+        self.bg2 = FitImage(source=image_source, size_hint=(1, 1), pos=(0, Window.height))
+
+        self.add_widget(self.bg1)
+        self.add_widget(self.bg2)
+
+    # Метод зміщення фону вниз
+    def update(self):
+        self.bg1.y -= self.speed
+        self.bg2.y -= self.speed
+
+        # Якщо перше зображення повністю вийшло за нижню межу, переносимо його нагору
+        if self.bg1.top <= 0:
+            self.bg1.y = self.bg2.top
+
+        # Якщо друге зображення повністю вийшло за нижню межу, переносимо його нагору
+        if self.bg2.top <= 0:
+            self.bg2.y = self.bg1.top
+
 class Bullet(Image):
+    # [ЗМІНА] Додано параметр owner (власник кулі: "player" або "enemy")
     def __init__(self, speed, owner, **kwargs):
         super().__init__(**kwargs)
         self.source = "assets/images/bullet.png"
         self.size_hint = (None, None)
         self.size = (dp(10), dp(30))
         self.speed = speed
-        self.owner = owner
+        self.owner = owner  # Зберігаємо власника
 
 
-# [ЗМІНА] Базовий клас для ВСІХ кораблів (спільна основа)
 class BaseShip(Image):
+    hp = NumericProperty(100)
+    max_hp = NumericProperty(100)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.size_hint = (None, None)
 
 
-# [ЗМІНА] Клас корабля гравця, який наслідує BaseShip
 class PlayerShip(BaseShip):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.speed = dp(5)
 
-    # [ЗМІНА] Логіка керування винесена безпосередньо в клас корабля
     def move(self, keys, screen_width):
         if keys["left"] and self.x > 0:
             self.x -= self.speed
         if keys["right"] and self.right < screen_width:
             self.x += self.speed
 
-    # [ЗМІНА] Новий метод стрільби всередині гравця
     def fire(self):
-        bullet = Bullet(speed=dp(10), owner='player')
+        # [ЗМІНА] При створенні кулі вказуємо, що її власник - гравець
+        bullet = Bullet(speed=dp(10), owner="player")
         bullet.center_x = self.center_x
         bullet.y = self.top
         return bullet
 
-# [ЗМІНА] Клас ворожого корабля
+
 class EnemyShip(BaseShip):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -64,12 +96,11 @@ class EnemyShip(BaseShip):
         self.last_shot = time.time()
         self.fire_rate = random.uniform(1.5, 3.0)  # Стріляє кожні 1.5 - 3 секунди
 
-    # [ЗМІНА] Метод руху ворога (завжди вниз)
     def move(self):
         self.y -= self.speed
 
-    # Новий метод стрільби всередині ворога
     def fire(self):
+        # [ЗМІНА] При створенні кулі вказуємо, що її власник - ворог
         bullet = Bullet(speed=dp(-8), owner="enemy")
         bullet.center_x = self.center_x
         bullet.top = self.y
@@ -80,26 +111,25 @@ class MainScreen(MDScreen):
     pass
 
 
+# [ЗМІНА] Створено новий екран програшу
 class GameOverScreen(MDScreen):
     pass
 
 
 class GameScreen(MDScreen):
     fps = 60
-    # ship_speed = 5
-    # bullet_speed = 10
+    timer = NumericProperty(100)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.keys = {"left": False, "right": False, "fire": False}
         self.bullets = []
         self.game_event = None
-        # [ЗМІНА] Додано список ворогів і змінну для меню паузи
-        self.enemies = []  # 🆕🆕🆕
-        self.dialog_pause = None  # 🆕🆕🆕
-        # [ЗМІНА] Змінні для постійного спавну ворогів
+        self.enemies = []
+        self.dialog_pause = None
         self.spawn_timer = 0
         self.spawn_delay = 2.0  # Час у секундах до появи наступного ворога
+        self.bg_layers = []
 
     def on_enter(self, *args):
         # [ЗМІНА] Очищення сцени від старих куль та ворогів перед новою грою
@@ -123,7 +153,6 @@ class GameScreen(MDScreen):
         if self.game_event:
             self.game_event.cancel()
 
-    # [ЗМІНА] Метод створення ворожого корабля у випадковій позиції
     def spawn_enemy(self):
         enemy = EnemyShip()
         enemy.x = random.randint(0, int(Window.width - dp(80)))  # dp(80) - ширина ворога
@@ -132,23 +161,19 @@ class GameScreen(MDScreen):
         self.enemies.append(enemy)
 
     def update(self, dt):
-        # ship = self.ids.ship
-        # if self.keys["left"] and ship.x > 0:
-        #     ship.x -= self.ship_speed
-        # if self.keys["right"] and ship.right < Window.width:
-        #     ship.x += self.ship_speed
+        self.timer += dt
+        for bg in self.bg_layers:
+            bg.update()
 
-        # [ЗМІНА] Оновлення стану головного корабля через його власний метод
+
         self.ids.ship.move(self.keys, Window.width)
 
-        # [ЗМІНА] Таймер спавну ворогів
         self.spawn_timer += dt  # Додаємо час, що пройшов з минулого кадру
         if self.spawn_timer > self.spawn_delay:
             self.spawn_enemy()  # Створюємо ворога
             self.spawn_timer = 0  # Скидаємо таймер на нуль
             self.spawn_delay = random.uniform(1.0, 3.0)  # Робимо наступний спавн випадковим (від 1 до 3 сек)
 
-        # [ЗМІНА] Оновлення ворогів
         for enemy in self.enemies[:]:
             enemy.move()
 
@@ -167,15 +192,14 @@ class GameScreen(MDScreen):
 
         # Використовуємо self.bullets[:], щоб можна було безпечно видаляти елементи зі списку
         for bullet in self.bullets[:]:
-            # [ЗМІНА] Оновлення позицій куль (вгору або вниз залежить від їхньої швидкості)
-            # bullet.y += self.bullet_speed
             bullet.y += bullet.speed
-            # Якщо куля вилетіла за межі екрана, видаляємо її зі сцени та списку
+            # [ЗМІНА] Використовуємо окремий метод remove_bullet для видалення куль, що вилетіли за екран
             if bullet.y > Window.height or bullet.top < 0:
                 self.remove_bullet(bullet)
 
-
+            # [ЗМІНА] Викликаємо перевірку колізій у кожному кадрі
         self.check_collisions()
+
 
 
     # [ЗМІНА] Окремий метод для перевірки всіх зіткнень
@@ -203,10 +227,12 @@ class GameScreen(MDScreen):
             # Якщо це куля ворога
             elif bullet.owner == "enemy":
                 if bullet.collide_widget(self.ids.ship):
+                    self.ids.ship.hp -=15
+                    if self.ids.ship.hp <= 0:
                     # Куля потрапила в гравця: гра завершується
-                    self.remove_bullet(bullet)
-                    self.game_over()
-                    return
+                        self.remove_bullet(bullet)
+                        self.game_over()
+                        return
 
     # [ЗМІНА] Окремий метод для безпечного видалення кулі
     def remove_bullet(self, bullet):
@@ -223,14 +249,12 @@ class GameScreen(MDScreen):
         # Перекидаємо на екран програшу
         self.manager.current = "game_over"
 
-    # [ЗМІНА] Метод-міст для кнопки на екрані
+
     def fire(self):
-        # Отримуємо кулю від корабля гравця
         new_bullet = self.ids.ship.fire()
         self.ids.front.add_widget(new_bullet)
         self.bullets.append(new_bullet)
 
-    # [ЗМІНА] Метод для відкриття діалогового вікна паузи
     def pause_game(self):
         if self.game_event:
             self.game_event.cancel()
@@ -265,11 +289,14 @@ class ShooterApp(MDApp):
         self.sm.add_widget(MainScreen(name="main"))
         self.sm.add_widget(GameScreen(name="game"))
 
+        # [ЗМІНА] Додаємо екран програшу до ScreenManager
+        self.sm.add_widget(GameOverScreen(name="game_over"))
+
         return self.sm
 
 
 if platform != "android":
-    Window.size = (450, 900)
+    Window.size = (450, 800)
     Window.top = 100
     Window.left = 600
 
